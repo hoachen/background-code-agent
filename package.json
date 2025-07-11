@@ -1,0 +1,27 @@
+{
+  "name": "background-code-agent",
+  "version": "1.0.0",
+  "description": "A TypeScript and Node.js agent to simulate background code modification tasks.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "typescript",
+    "nodejs",
+    "ai-agent",
+    "code-modification"
+  ],
+  "author": "Jules (AI Agent)",
+  "license": "ISC",
+  "dependencies": {
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.20",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.3.3"
+  }
+}
