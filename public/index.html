@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Background Code Agent</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Background Code Agent</h1>
+
+    <div class="container">
+        <div class="form-container">
+            <h2>Submit New Task</h2>
+            <form id="taskForm">
+                <div>
+                    <label for="repoUrl">Repository URL:</label>
+                    <input type="text" id="repoUrl" name="repoUrl" required value="gohugoio/hugo">
+                </div>
+                <div>
+                    <label for="branch">Branch:</label>
+                    <input type="text" id="branch" name="branch" required value="master">
+                </div>
+                <div>
+                    <label for="taskDescription">Task Description:</label>
+                    <textarea id="taskDescription" name="taskDescription" rows="4" required>Fix the date formatting bug in src/utils.ts to use en-CA locale.</textarea>
+                </div>
+                <div>
+                    <label for="setupScripts">Setup Scripts (comma-separated, optional):</label>
+                    <input type="text" id="setupScripts" name="setupScripts" value="npm install, npm run lint-check">
+                </div>
+                <button type="submit">Submit Task</button>
+            </form>
+        </div>
+
+        <div class="tasks-container">
+            <h2>Task Progress</h2>
+            <button id="refreshTasks">Refresh Tasks</button>
+            <div id="taskList">
+                <p>Loading tasks...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="client.js"></script>
+</body>
+</html>

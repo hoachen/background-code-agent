@@ -1,73 +1,53 @@
 // src/agent.ts
 
 import { v4 as uuidv4 } from 'uuid';
+import { exec } from 'child_process';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { TaskRequest, TaskResult, TaskStatus, MockFileSystem } from './types';
+
+// Utility function to promisify exec
+const execPromise = (command: string, options?: any) => {
+  return new Promise<{ stdout: string, stderr: string, error?: Error | null }>((resolve) => {
+    exec(command, options, (error, stdout, stderr) => {
+      if (error) {
+        // Log the actual error object here for system-level debugging
+        console.error(`[execPromise] Error executing command "${command}":`, error);
+        // Resolve with the error object along with stdout and stderr
+        resolve({ stdout, stderr, error });
+        return;
+      }
+      resolve({ stdout, stderr, error: null });
+    });
+  });
+};
+
 
 export class BackgroundCodeAgent {
   private tasks: Map<string, TaskResult> = new Map();
-  private mockFileSystem: MockFileSystem = {};
+  // private mockFileSystem: MockFileSystem = {}; // Replaced by actual file system operations
 
   constructor() {
-    this.initializeMockFileSystem();
+    // this.initializeMockFileSystem(); // No longer needed as we use actual repo clones
   }
 
-  private initializeMockFileSystem(): void {
-    this.mockFileSystem['src/utils.ts'] = `
-export function formatDate(date: Date): string {
-  // Simulate a bug: incorrect date formatting
-  return date.toISOString().substring(0, 10);
-}
-
-export function greet(name: string): string {
-  return \`Hello, \${name}!\`;
-}
-`;
-    this.mockFileSystem['src/components/Button.tsx'] = `
-import React from 'react'; // Assume React is available for type checking
-
-interface ButtonProps {
-  label: string;
-  onClick?: () => void;
-}
-
-const Button: React.FC<ButtonProps> = ({ label, onClick }) => {
-  return (
-    <button onClick={onClick}>
-      {label}
-    </button>
-  );
-};
-
-export default Button;
-`;
-    this.mockFileSystem['tests/utils.test.ts'] = `
-// import { formatDate } from '../src/utils'; // Path for actual execution
-
-describe('formatDate', () => {
-  it('should format date correctly', () => {
-    const date = new Date(2023, 0, 1); // Jan 1, 2023
-    // Expected: '2023-01-01'
-    // Current (buggy): '2023-01-01' (but from toISOString, might be timezone issues in real scenarios)
-    // No assertion here yet, to be added by agent task
-  });
-});
-`;
-  }
+  // private initializeMockFileSystem(): void { ... } // Removed
 
   public submitTask(request: TaskRequest): string {
     const taskId = uuidv4();
+    // Create a temporary directory for this task
+    const taskWorkspaceDir = path.join(__dirname, '..', 'workspaces', taskId);
     const initialResult: TaskResult = {
       taskId,
       status: 'pending',
       summary: `Task "${request.taskDescription}" received.`,
       executionLogs: [`[${new Date().toISOString()}] Task submitted: ${request.taskDescription}`],
+      workspacePath: taskWorkspaceDir, // Store workspace path
     };
     this.tasks.set(taskId, initialResult);
 
     // Process the task asynchronously
-    this.processTask(taskId, request).catch(err => {
-        // Fallback error logging if processTask itself throws an unhandled synchronous error
-        // (though it's designed to handle errors internally and update task status)
+    this.processTask(taskId, request, taskWorkspaceDir).catch(async err => {
         console.error(`[Agent] Critical error processing task ${taskId}:`, err);
         const taskEntry = this.tasks.get(taskId);
         if (taskEntry) {
@@ -76,6 +56,13 @@ describe('formatDate', () => {
             taskEntry.errorMessage = err instanceof Error ? err.message : String(err);
             taskEntry.executionLogs.push(`[${new Date().toISOString()}] Critical agent error: ${taskEntry.errorMessage}`);
         }
+        // Attempt to clean up workspace directory on critical failure
+        try {
+            await fs.rm(taskWorkspaceDir, { recursive: true, force: true });
+            this.log(taskId, `Cleaned up workspace: ${taskWorkspaceDir}`);
+        } catch (cleanupError) {
+            this.log(taskId, `Error cleaning up workspace ${taskWorkspaceDir}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+        }
     });
 
     return taskId;
@@ -83,6 +70,10 @@ describe('formatDate', () => {
 
   public getTaskStatus(taskId: string): TaskResult | undefined {
     return this.tasks.get(taskId);
+  }
+
+  public getAllTasks(): { [taskId: string]: TaskResult } {
+    return Object.fromEntries(this.tasks);
   }
 
   private log(taskId: string, message: string): void {
@@ -100,40 +91,9 @@ describe('formatDate', () => {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  private generateDiff(filePath: string, oldContent: string, newContent: string): string {
-    const oldLines = oldContent.split('\\n');
-    const newLines = newContent.split('\\n');
-    let diffString = `--- a/${filePath}\\n+++ b/${filePath}\\n`;
+  // private generateDiff(filePath: string, oldContent: string, newContent: string): string { ... } // Replaced by git diff
 
-    // This is a simplified diff, only showing lines that were part of the change.
-    // A more sophisticated diff would use a proper algorithm (e.g., Myers).
-    const maxLines = Math.max(oldLines.length, newLines.length);
-    let linesCompared = 0;
-    for (let i = 0; i < maxLines; i++) {
-        if (linesCompared > 20 && i < maxLines - 5) { // Limit diff context for long files
-            if (i === Math.floor(maxLines/2)) diffString += `... (diff truncated for brevity) ...\\n`;
-            continue;
-        }
-        if (oldLines[i] !== newLines[i]) {
-            if (i < oldLines.length) {
-                diffString += `- ${oldLines[i]}\\n`;
-            }
-            if (i < newLines.length) {
-                diffString += `+ ${newLines[i]}\\n`;
-            }
-            linesCompared++;
-        } else if (i < newLines.length) {
-            // context lines, could be added but make diff long
-            // diffString += `  ${newLines[i]}\\n`;
-        }
-    }
-    if (diffString === `--- a/${filePath}\\n+++ b/${filePath}\\n`) {
-        return "No textual changes detected or change too complex for simple diff.";
-    }
-    return diffString;
-  }
-
-  private async processTask(taskId: string, request: TaskRequest): Promise<void> {
+  private async processTask(taskId: string, request: TaskRequest, taskWorkspaceDir: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) {
       console.error(`Task ${taskId} not found for processing.`);
@@ -142,133 +102,169 @@ describe('formatDate', () => {
 
     task.status = 'in_progress';
     this.log(taskId, `Processing started for task: ${request.taskDescription}`);
-
-    // Create a task-specific file system anapshot
-    const taskFileSystem: MockFileSystem = JSON.parse(JSON.stringify(this.mockFileSystem));
+    this.log(taskId, `Workspace: ${taskWorkspaceDir}`);
 
     try {
-      this.log(taskId, `Simulating repository clone for ${request.repoUrl} on branch ${request.branch}...`);
-      await this.simulateDelay(1000);
+      // 1. Create workspace and clone repository
+      await fs.mkdir(taskWorkspaceDir, { recursive: true });
+      this.log(taskId, `Created workspace directory: ${taskWorkspaceDir}`);
 
+      const cloneUrl = request.repoUrl.startsWith('http') ? request.repoUrl : `https://github.com/${request.repoUrl}.git`;
+      this.log(taskId, `Cloning repository ${cloneUrl} (branch: ${request.branch})...`);
+      const cloneResult = await execPromise(
+        `git clone --branch ${request.branch} --depth 1 ${cloneUrl} .`,
+        { cwd: taskWorkspaceDir }
+      );
+
+      if (cloneResult.error) {
+        this.log(taskId, `Git clone command failed to execute: ${cloneResult.error.message}`);
+        this.log(taskId, `Git clone stdout: ${cloneResult.stdout}`);
+        this.log(taskId, `Git clone stderr: ${cloneResult.stderr}`);
+        throw new Error(`Git clone command execution failed: ${cloneResult.error.message}`);
+      }
+      // Check stderr for actual clone failure, as git clone can use stderr for progress/warnings.
+      // A common success message in stderr is "Cloning into '.'..."
+      if (cloneResult.stderr && !cloneResult.stderr.toLowerCase().includes('cloning into') && !cloneResult.stderr.toLowerCase().includes('already exists')) {
+        try {
+            await fs.access(path.join(taskWorkspaceDir, '.git'));
+            this.log(taskId, `Git clone completed with warnings/info: ${cloneResult.stderr}`);
+        } catch (gitAccessError) {
+            this.log(taskId, `Git clone likely failed. .git directory not found. Stdout: ${cloneResult.stdout}`);
+            this.log(taskId, `Git clone stderr: ${cloneResult.stderr}`);
+            throw new Error(`Git clone failed: ${cloneResult.stderr || cloneResult.stdout || 'Unknown clone error'}`);
+        }
+      } else {
+        this.log(taskId, `Git clone successful. Output (stdout/stderr):\n${cloneResult.stdout || cloneResult.stderr}`);
+      }
+
+      // 2. Run setup scripts (if any)
       if (request.setupScripts && request.setupScripts.length > 0) {
         this.log(taskId, 'Starting environment setup...');
         for (const script of request.setupScripts) {
           this.log(taskId, `Executing setup script: ${script}`);
-          await this.simulateDelay(1500);
-          if (script.toLowerCase().includes('fail_setup') || script.toLowerCase().includes('fail')) {
-            throw new Error(`Simulated failure in setup script: "${script}"`);
+          const scriptResult = await execPromise(script, { cwd: taskWorkspaceDir });
+
+          this.log(taskId, `Script stdout:\n${scriptResult.stdout}`);
+          if (scriptResult.stderr) {
+            this.log(taskId, `Script stderr:\n${scriptResult.stderr}`);
           }
-        }
-        this.log(taskId, 'Environment setup completed successfully.');
-      }
 
-      this.log(taskId, 'Analyzing code...');
-      await this.simulateDelay(1500);
-
-      this.log(taskId, 'Generating modification plan based on description...');
-      await this.simulateDelay(1000);
-      // In a real agent, this step would involve more complex NLP and planning.
-
-      this.log(taskId, 'Applying modifications...');
-      let modificationSummary = 'No specific modifications applied based on description.';
-      let diffOutput = '';
-
-      // Simple keyword-based modification logic
-      const desc = request.taskDescription.toLowerCase();
-      const filePathMatch = request.taskDescription.match(/(src\/[\w./-]+\.tsx?|tests\/[\w./-]+\.test\.tsx?)/);
-      const targetFile = filePathMatch ? filePathMatch[0] : undefined;
-
-      if (targetFile && taskFileSystem[targetFile]) {
-        const originalContent = taskFileSystem[targetFile];
-        let newContent = originalContent;
-
-        if (desc.includes('fix') && desc.includes('bug') && targetFile === 'src/utils.ts' && desc.includes('date format')) {
-          newContent = originalContent.replace(
-            'date.toISOString().substring(0, 10);',
-            "date.toLocaleDateString('en-CA'); // Patched to use 'en-CA' for yyyy-mm-dd format"
-          );
-          modificationSummary = `Successfully patched date formatting bug in ${targetFile}.`;
-        } else if (desc.includes('add') && desc.includes('handler') && targetFile === 'src/components/Button.tsx' && desc.includes('click event')) {
-          if (newContent.includes('onClick?: () => void;')) { // check if it's the Button component
-             newContent = newContent.replace(
-                'const Button: React.FC<ButtonProps> = ({ label, onClick }) => {',
-                `const Button: React.FC<ButtonProps> = ({ label, onClick }) => {
-  const internalClickHandler = () => {
-    console.log('Button "${label}" clicked!');
-    if (onClick) onClick();
-  };`
-            ).replace(
-                '<button onClick={onClick}>',
-                '<button onClick={internalClickHandler}>'
-            );
-            modificationSummary = `Added a click event handler to Button component in ${targetFile}.`;
+          if (scriptResult.error) {
+            throw new Error(`Setup script "${script}" failed to execute: ${scriptResult.error.message}. Stderr: ${scriptResult.stderr}`);
           }
-        } else if (desc.includes('add') && desc.includes('test') && targetFile && targetFile.startsWith('tests/')) {
-          if (desc.includes('formatdate') && targetFile === 'tests/utils.test.ts') {
-            newContent = newContent.replace(
-              '// No assertion here yet, to be added by agent task',
-              "expect(formatDate(new Date(2023,0,1))).toBe('2023-01-01'); // Assertion added by agent"
-            );
-            modificationSummary = `Added test assertion for formatDate in ${targetFile}.`;
-          } else {
-            newContent += `\nit('should handle another scenario generated by agent', () => {\n  expect(true).toBe(true); // Placeholder test\n});\n`;
-            modificationSummary = `Added a new placeholder test scenario in ${targetFile}.`;
+          // Heuristic for script failure based on stderr content or specific keywords
+          if (scriptResult.stderr && (scriptResult.stderr.toLowerCase().includes('error') || scriptResult.stderr.toLowerCase().includes('failed'))) {
+            if (!script.toLowerCase().includes('fail_setup')) { // Don't throw if it was a known failing script for testing
+                 this.log(taskId, `Warning: Setup script "${script}" produced error messages in stderr.`);
+            } else {
+                 throw new Error(`Simulated failure in setup script: "${script}" (due to fail_setup keyword). Stderr: ${scriptResult.stderr}`);
+            }
           }
-        } else {
-            this.log(taskId, `No specific modification rule matched for file ${targetFile} and description.`);
-            modificationSummary = `Generic code scan performed on ${targetFile}, no specific rule applied.`;
+           if (script.toLowerCase().includes('fail_setup')) { // explicit fail trigger
+                throw new Error(`Simulated failure in setup script: "${script}" (due to fail_setup keyword). Stderr: ${scriptResult.stderr}`);
+           }
         }
-
-        if (originalContent !== newContent) {
-            taskFileSystem[targetFile] = newContent;
-            diffOutput = this.generateDiff(targetFile, originalContent, newContent);
-            this.log(taskId, `Modifications applied to ${targetFile}.`);
-        } else {
-            this.log(taskId, `No textual changes made to ${targetFile} based on rules.`);
-        }
-
-      } else if (targetFile) {
-        this.log(taskId, `Warning: Target file ${targetFile} not found in mock file system.`);
-        modificationSummary = `Could not find target file ${targetFile} for modifications.`;
-      }
-
-
-      if (desc.includes('conflict')) {
-        this.log(taskId, 'Simulating a code conflict...');
-        await this.simulateDelay(500);
-        throw new Error('Simulated code conflict during modification application.');
-      }
-
-      this.log(taskId, 'Running tests (simulated)...');
-      await this.simulateDelay(2000);
-      const testsPass = !desc.includes('fail test');
-      if (testsPass) {
-        this.log(taskId, 'All simulated tests passed.');
+        this.log(taskId, 'Environment setup completed.');
       } else {
-        this.log(taskId, 'Simulated test failure.');
-        throw new Error('One or more simulated tests failed.');
+        this.log(taskId, 'No setup scripts to run.');
+      }
+
+      // 3. Apply modifications using Gemini CLI
+      this.log(taskId, 'Attempting code modification with Gemini CLI...');
+      this.log(taskId, 'Note: Gemini CLI may require a GEMINI_API_KEY environment variable to be set.');
+      const geminiCommand = `npx @google/gemini-cli "${request.taskDescription.replace(/"/g, '\\"')}"`; // Escape quotes in description
+      this.log(taskId, `Executing Gemini CLI: ${geminiCommand}`);
+
+      const geminiResult = await execPromise(geminiCommand, {
+        cwd: taskWorkspaceDir,
+        // env: { ...process.env, GEMINI_API_KEY: 'YOUR_API_KEY_IF_NEEDED' } // Example if key needs to be passed explicitly
+      });
+
+      this.log(taskId, `Gemini CLI stdout:\n${geminiResult.stdout}`);
+      if (geminiResult.stderr) {
+        this.log(taskId, `Gemini CLI stderr:\n${geminiResult.stderr}`);
+      }
+
+      if (geminiResult.error) {
+        // Gemini CLI command itself failed to execute (e.g., command not found, crash)
+        throw new Error(`Gemini CLI command execution failed: ${geminiResult.error.message}. Stderr: ${geminiResult.stderr}`);
+      }
+      // Further checks for Gemini CLI success can be added here based on its typical output for errors vs success.
+      // For example, if Gemini CLI indicates an error via stderr even with exit code 0:
+      if (geminiResult.stderr && (geminiResult.stderr.toLowerCase().includes("error") || geminiResult.stderr.toLowerCase().includes("failed"))) {
+          this.log(taskId, "Gemini CLI reported errors in stderr. Treating as potential failure.");
+          // Decide if this should throw an error or just be a warning. For now, log and proceed.
+          // throw new Error(`Gemini CLI reported errors: ${geminiResult.stderr}`);
+      }
+
+
+      let modificationSummary = `Modifications attempted by Gemini CLI. Output: ${geminiResult.stdout.substring(0, 300)}...`;
+      if (geminiResult.stdout.length > 300) modificationSummary += " (truncated)";
+
+
+      // 4. Generate diff of changes
+      this.log(taskId, 'Generating diff of changes using "git diff HEAD"...');
+      const diffResult = await execPromise('git diff HEAD', { cwd: taskWorkspaceDir });
+
+      if (diffResult.error) {
+         this.log(taskId, `git diff command execution failed: ${diffResult.error.message}`);
+         task.diff = "Error generating diff.";
+      } else {
+        if (diffResult.stderr) {
+            this.log(taskId, `Git diff stderr: ${diffResult.stderr}`);
+        }
+        task.diff = diffResult.stdout || "No textual changes detected by git diff.";
+      }
+      this.log(taskId, `Diff generated. Length: ${task.diff.length}`);
+
+      if (!task.diff || task.diff === "No textual changes detected by git diff." || task.diff.trim() === "") {
+          modificationSummary = "Gemini CLI ran, but no file changes were detected by git diff.";
+          this.log(taskId, modificationSummary);
+      } else {
+          modificationSummary = `Gemini CLI applied changes. Diff length: ${task.diff.length}`;
+      }
+
+
+      // 5. Simulate running tests
+      this.log(taskId, 'Running tests (simulated)...');
+      await this.simulateDelay(1000);
+      const shouldFailTest = request.taskDescription.toLowerCase().includes('fail test');
+      if (shouldFailTest) {
+        this.log(taskId, 'Simulated test failure based on task description.');
+        throw new Error('One or more simulated tests failed as per task description.');
+      } else {
+        this.log(taskId, 'All simulated tests passed.');
       }
 
       task.status = 'completed';
       task.summary = modificationSummary;
-      if (diffOutput) task.diff = diffOutput;
-      task.pullRequestUrl = `https://github.com/${request.repoUrl}/pull/${Math.floor(Math.random() * 1000) + 1}`;
+      task.pullRequestUrl = `https://github.com/${request.repoUrl.replace(/\.git$/, '')}/pull/${Math.floor(Math.random() * 1000) + 1}`;
       this.log(taskId, `Task completed successfully. PR URL: ${task.pullRequestUrl}`);
 
     } catch (error: any) {
-      this.log(taskId, `Error during task processing: ${error.message}`);
+      this.log(taskId, `ERROR during task processing: ${error.message}`);
+      // error.stderr and error.stdout might be available if the error originated from a failed execPromise
+      if (error.stderr) {
+        this.log(taskId, `Captured Stderr from failed command: ${error.stderr}`);
+      }
+      if (error.stdout) {
+        this.log(taskId, `Captured Stdout from failed command: ${error.stdout}`);
+      }
       task.status = 'failed';
-      task.summary = `Task failed: ${error.message}`;
+      task.summary = `Task failed: ${error.message.substring(0, 500)}`; // Cap summary length
       task.errorMessage = error.message;
+    } finally {
+        // 6. Cleanup workspace
+        this.log(taskId, `Attempting to clean up workspace: ${taskWorkspaceDir}...`);
+        try {
+            await fs.rm(taskWorkspaceDir, { recursive: true, force: true });
+            this.log(taskId, `Successfully cleaned up workspace: ${taskWorkspaceDir}`);
+        } catch (cleanupError) {
+            this.log(taskId, `Error cleaning up workspace ${taskWorkspaceDir}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+        }
     }
   }
 
-  public setMockFileContent(filePath: string, content: string): void {
-    this.mockFileSystem[filePath] = content;
-    // Note: This affects the base mock FS. Tasks already in progress will have their own snapshot.
-  }
-
-  public getMockFileContent(filePath: string): string | undefined {
-      return this.mockFileSystem[filePath];
-  }
+  // public setMockFileContent(filePath: string, content: string): void { ... } // Removed
+  // public getMockFileContent(filePath: string): string | undefined { ... } // Removed
 }
