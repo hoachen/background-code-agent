@@ -26,6 +26,7 @@ export interface TaskResult {
   executionLogs: string[];
   pullRequestUrl?: string; // Simulated Pull Request URL
   errorMessage?: string; // Error message if the task failed
+  workspacePath?: string; // Path to the temporary workspace for this task
 }
 
 /**

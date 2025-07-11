@@ -1,0 +1,148 @@
+body {
+    font-family: sans-serif;
+    margin: 0;
+    background-color: #f4f4f4;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 20px;
+    gap: 20px;
+}
+
+.form-container, .tasks-container {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    flex-basis: 48%; /* Adjust as needed, allows for some space between */
+    min-width: 300px; /* Minimum width before wrapping */
+}
+
+h1 {
+    text-align: center;
+    padding: 20px 0;
+    background-color: #333;
+    color: #fff;
+    margin-bottom: 20px;
+}
+
+h2 {
+    color: #333;
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+input[type="text"],
+textarea {
+    width: calc(100% - 22px); /* Full width minus padding and border */
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box; /* Important for width calculation */
+}
+
+textarea {
+    resize: vertical;
+}
+
+button {
+    background-color: #5cb85c;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+button:hover {
+    background-color: #4cae4c;
+}
+
+#refreshTasks {
+    background-color: #007bff;
+    margin-bottom: 15px;
+}
+
+#refreshTasks:hover {
+    background-color: #0056b3;
+}
+
+#taskList {
+    margin-top: 10px;
+}
+
+.task {
+    background: #e9ecef;
+    padding: 15px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    border-left: 5px solid #007bff;
+}
+
+.task.completed {
+    border-left-color: #28a745;
+}
+
+.task.failed {
+    border-left-color: #dc3545;
+}
+
+.task.in_progress {
+    border-left-color: #ffc107;
+}
+
+.task.pending {
+    border-left-color: #6c757d;
+}
+
+
+.task h3 {
+    margin-top: 0;
+    margin-bottom: 5px;
+    font-size: 1.1em;
+}
+
+.task p {
+    margin: 5px 0;
+    font-size: 0.9em;
+}
+
+.task pre {
+    background-color: #333;
+    color: #f8f8f2;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    white-space: pre-wrap; /* Wrap long lines */
+    word-wrap: break-word; /* Break words if necessary */
+}
+
+.task .logs {
+    max-height: 200px;
+    overflow-y: auto;
+    background: #f8f9fa;
+    border: 1px solid #eee;
+    padding: 5px;
+    font-size: 0.8em;
+    margin-top: 5px;
+}
+
+.task .log-entry {
+    padding: 2px 0;
+    border-bottom: 1px dashed #ddd;
+}
+.task .log-entry:last-child {
+    border-bottom: none;
+}
